@@ -36,7 +36,7 @@ The system computes graph metrics internally and produces **explicit risk scores
 
 ---
 
-## 🔁 Real-World Workflow (How This Works in Practice)
+## 🔁 Real-World Workflow 
 
 1. Users perform UPI transactions
 2. Banking systems collect transaction events
@@ -142,7 +142,7 @@ Each risk decision is accompanied by **explicit reasons** derived from graph met
 
 ---
 
-## 🖥️ Analyst Console (Optional UI)
+## 🖥️ Analyst Console 
 
 A minimal **Streamlit-based analyst console** is included for:
 
@@ -180,39 +180,17 @@ docker compose up
 
 ---
 
-## 🧪 Break Phase & Adversarial Testing
-
-For the Build2Break hackathon:
-
-* Breaking teams interact with the system via the **API**
-* Breakers simulate **bank systems or fraud analysts**
-* Inputs are provided as structured JSON payloads
-
-This enables reproducible, systematic testing of:
-
-* Threshold logic
-* Graph assumptions
-* Edge cases
-
----
-
-## ⚠️ Assumptions & Limitations
-
-* The system operates on **transaction batches**, not live streams
-* Time relationships are approximated
-* Thresholds are heuristic and configurable
-* No real customer data is used
-* The system is designed for **demonstration and adversarial evaluation**
-
+## ⚠️ System Scope & Design Notes
+* The system analyzes **transaction relationships** provided by upstream analysis or monitoring processes
+* Risk indicators are derived from **structural and behavioral patterns** in the data
+* Detection logic is **configurable** and designed for evaluative and testing contexts
 ---
 
 ## 🔐 Security & Ethics
+* No real customer or financial data is processed or stored
+* The system does not perform automated enforcement actions
+* Human oversight is assumed in all usage scenarios
 
-This project does **not**:
-
-* Process real UPI data
-* Make enforcement decisions
-* Replace human analysts
 
 It is strictly an **educational and evaluative system**.
 
