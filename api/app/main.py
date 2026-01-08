@@ -9,7 +9,6 @@ app = FastAPI()
 # -----------------------------
 # Helpers
 # -----------------------------
-
 def parse_time(ts):
     try:
         return datetime.fromisoformat(ts)
@@ -17,23 +16,26 @@ def parse_time(ts):
         return None
 
 
-def scaled_risk(raw_score: float, batch_size: int) -> float:
-    if raw_score <= 0 or batch_size <= 0:
+def slow_risk(raw, n):
+    if raw <= 0 or n <= 0:
         return 0.0
-    scale = math.log1p(batch_size)
-    return 1 - math.exp(-(raw_score / scale))
+    return 1 - math.exp(-(raw / math.log1p(n)))
 
 
 # -----------------------------
 # API
 # -----------------------------
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 
 @app.post("/analyze")
 def analyze(payload: dict = Body(...)):
 
     txs = payload.get("transactions")
     if not isinstance(txs, list):
-        raise HTTPException(status_code=400, detail="transactions must be a list")
+        raise HTTPException(400, "transactions must be a list")
 
     if len(txs) == 0:
         return {
@@ -55,7 +57,7 @@ def analyze(payload: dict = Body(...)):
     for tx in txs:
         for k in ("sender", "receiver", "amount", "time"):
             if k not in tx:
-                raise HTTPException(status_code=400, detail="invalid transaction")
+                raise HTTPException(400, "invalid transaction format")
 
         s, r = tx["sender"], tx["receiver"]
         t = parse_time(tx["time"])
@@ -66,7 +68,7 @@ def analyze(payload: dict = Body(...)):
         amounts[r].append(tx["amount"])
 
     # -----------------------------
-    # Detect cycles (ring fraud)
+    # Detect circular fraud (RINGS)
     # -----------------------------
     cycle_nodes = set()
     for c in nx.simple_cycles(G):
@@ -74,7 +76,7 @@ def analyze(payload: dict = Body(...)):
             cycle_nodes.update(c)
 
     # -----------------------------
-    # Account risk
+    # Account risk scoring
     # -----------------------------
     accounts = {}
 
@@ -82,62 +84,63 @@ def analyze(payload: dict = Body(...)):
         incoming = G.in_degree(node)
         outgoing = G.out_degree(node)
 
-        raw_score = 0.0
+        raw = 0.0
         reasons = []
 
-        # Mule patterns
+        # Funnel / mule signals
         if incoming >= 3:
-            raw_score += 0.4
-            reasons.append(f"received funds from {incoming} accounts")
+            raw += 0.4
+            reasons.append("fund convergence")
 
         if incoming > 0 and outgoing > 0:
             ins = sorted(t for t in in_times[node] if t)
             outs = sorted(t for t in out_times[node] if t)
             if ins and outs and (outs[0] - ins[-1]).total_seconds() < 300:
-                raw_score += 0.4
-                reasons.append("rapid pass-through behavior")
+                raw += 0.4
+                reasons.append("rapid pass-through")
 
         if len(amounts[node]) >= 3:
             if max(amounts[node]) - min(amounts[node]) < 0.1 * max(amounts[node]):
-                raw_score += 0.3
-                reasons.append("structured transaction amounts")
+                raw += 0.3
+                reasons.append("amount structuring")
 
-        # Base risk
-        risk = scaled_risk(raw_score, len(txs))
+        # Base risk (slow growth)
+        risk = slow_risk(raw, len(txs))
 
-        # 🔥 HARD OVERRIDE: CIRCULAR FRAUD
+        # 🔥 HARD OVERRIDE — COLLUSIVE RING
         if node in cycle_nodes:
-            risk = max(risk, 0.75)
-            reasons.append("participates in circular fund movement")
+            risk = max(risk, 0.8)
+            reasons.append("circular fund movement")
 
         if risk > 0:
             accounts[node] = {
+                "account": node,
                 "incoming": incoming,
                 "outgoing": outgoing,
                 "risk_score": round(risk, 2),
-                "explanation": "Account flagged because it " + " and ".join(reasons) + "."
+                "explanation": "Account flagged due to " + ", ".join(reasons)
             }
 
     # -----------------------------
-    # Transaction-level risk (simple)
+    # Transaction-level risk
     # -----------------------------
     flagged = set(accounts.keys())
     transaction_risks = []
 
     for tx in txs:
         score = 0.0
-        reasons = []
+        reason = []
 
         if tx["sender"] in flagged or tx["receiver"] in flagged:
-            score += 0.5
-            reasons.append("linked to high-risk account")
+            score = 0.5
+            reason.append("linked to high-risk account")
 
         transaction_risks.append({
             "sender": tx["sender"],
             "receiver": tx["receiver"],
             "amount": tx["amount"],
-            "risk_score": round(min(score, 1.0), 2),
-            "reason": ", ".join(reasons) if reasons else "no elevated indicators"
+            "risk_score": round(score, 2),
+            "reason": ", ".join(reason) if reason else "no elevated indicators"
         })
 
     # -----------------------------
@@ -157,7 +160,7 @@ def analyze(payload: dict = Body(...)):
     return {
         "batch_risk_score": round(batch_risk_score, 2),
         "batch_risk_level": batch_risk_level,
-        "accounts": [{"account": k, **v} for k, v in accounts.items()],
+        "accounts": list(accounts.values()),
         "transaction_risks": transaction_risks,
         "transactions": txs
     }

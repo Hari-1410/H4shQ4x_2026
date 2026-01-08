@@ -4,12 +4,13 @@ import json
 import networkx as nx
 import plotly.graph_objects as go
 
+# IMPORTANT: Docker service name
 API_URL = "http://api:8000/analyze"
 
 st.set_page_config(page_title="Fraud Risk Analyst Console", layout="wide")
 
 st.markdown("## 🏦 Fraud Risk Analyst Console")
-st.caption("Decision-support system.")
+st.caption("Decision-support system")
 st.divider()
 
 # -----------------------------
@@ -30,19 +31,23 @@ sample = {
 
 with left:
     st.subheader("📥 Transactions")
-    raw = st.text_area("JSON Batch", json.dumps(sample, indent=2), height=240)
+    raw = st.text_area("JSON Batch", json.dumps(sample, indent=2), height=260)
     run = st.button("🚀 Analyze Batch")
 
 if run:
-    payload = json.loads(raw)
-    res = requests.post(API_URL, json=payload)
-    if res.status_code != 200:
-        st.error(res.text)
+    try:
+        payload = json.loads(raw)
+        res = requests.post(API_URL, json=payload, timeout=10)
+        if res.status_code != 200:
+            st.error(res.text)
+            st.stop()
+        st.session_state.data = res.json()
+    except Exception as e:
+        st.error(str(e))
         st.stop()
-    st.session_state.data = res.json()
 
 if "data" not in st.session_state:
-    st.info("Run analysis to see results.")
+    st.info("Paste transactions and run analysis.")
     st.stop()
 
 data = st.session_state.data
@@ -83,7 +88,9 @@ with graph_col:
         node_x.append(x)
         node_y.append(y)
         r = risk_map.get(n, 0)
-        node_color.append("red" if r >= 0.7 else "orange" if r >= 0.4 else "blue")
+        node_color.append(
+            "red" if r >= 0.7 else "orange" if r >= 0.4 else "blue"
+        )
 
     edge_x, edge_y = [], []
     for u, v in G.edges():
@@ -93,10 +100,16 @@ with graph_col:
         edge_y += [y0, y1, None]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=edge_x, y=edge_y, mode="lines",
-                             line=dict(color="rgba(160,160,160,0.4)")))
-    fig.add_trace(go.Scatter(x=node_x, y=node_y, mode="markers",
-                             marker=dict(size=18, color=node_color)))
+    fig.add_trace(go.Scatter(
+        x=edge_x, y=edge_y,
+        mode="lines",
+        line=dict(color="rgba(160,160,160,0.4)")
+    ))
+    fig.add_trace(go.Scatter(
+        x=node_x, y=node_y,
+        mode="markers",
+        marker=dict(size=18, color=node_color)
+    ))
 
     fig.update_layout(
         margin=dict(l=0, r=0, t=10, b=0),

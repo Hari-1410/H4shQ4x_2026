@@ -5,7 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY analyst_console.py .
 
-EXPOSE 8000
 EXPOSE 8501
+
+CMD ["streamlit", "run", "analyst_console.py", "--server.address=0.0.0.0", "--server.port=8501"]
