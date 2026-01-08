@@ -66,10 +66,112 @@ UPI / Payment Systems
         ↓
  Analyst Decision / Bank Policy
 ```
+---
 
-An optional **Streamlit Analyst Console** is provided to visualize and inspect results during demonstrations.
+## API INSTALLATION
+This project is *fully containerized* and can be executed on any machine with Docker support.  
+No Python installation or manual dependency setup is required.
 
 ---
+
+### ✅ Prerequisites
+
+Ensure the following are installed on your system:
+
+- *Docker*
+- *Docker Compose*
+
+> Tested on Windows, Linux, and macOS using Docker Desktop.
+
+---
+
+### 🚀 Step-by-Step Setup
+
+#### 1️⃣ Clone the Repository
+
+```bash
+git clone https://github.com/Hari-1410/H4shQ4x_2026.git
+cd H4shQ4x_2026
+
+Start the System
+
+From the root of the repository, run:
+
+docker compose up --build
+
+
+This command will:
+
+Build the Fraud Analysis API (FastAPI)
+
+Build the Analyst Console (Streamlit)
+
+Start both services in a shared Docker network
+
+
+
+3.Access the Services
+
+Once the containers are running, open your browser:
+
+Fraud Analysis API
+
+http://localhost:8000
+
+
+Health check:
+
+http://localhost:8000/health
+
+
+Analyst Console (UI)
+
+http://localhost:8501
+
+
+The analyst console allows you to submit transaction batches, view risk scores, explanations, and inspect graph-based evidence.
+
+🧪 Demo Input 
+
+Paste the following JSON into the Analyst Console to test the system:
+
+{
+  "transactions": [
+    { "from": "U1", "to": "A1", "amount": 5200 },
+    { "from": "U2", "to": "A1", "amount": 5100 },
+    { "from": "U3", "to": "A2", "amount": 5000 },
+    { "from": "A1", "to": "A3", "amount": 4800 },
+    { "from": "A2", "to": "A3", "amount": 4700 },
+    { "from": "A3", "to": "U4", "amount": 4600 },
+    { "from": "U4", "to": "A1", "amount": 4500 }
+  ]
+}
+
+
+Click Analyze Risk to view the results.
+
+Stopping the System
+
+To stop the containers, press:
+
+CTRL + C
+
+
+Or run:
+
+docker compose down
+
+🧠 NOTE
+
+No real UPI or banking data is used
+
+End users never interact with this system directly
+
+All fraud detection logic resides in the backend API
+
+Designed for simulation, adversarial testing, and evaluation
+
+
 
 ## 🚀 API Usage
 
@@ -157,26 +259,6 @@ The UI:
 * Displays risk scores, metrics, and optional graph evidence
 
 ⚠️ **All fraud logic resides in the API, not in the UI.**
-
----
-
-## 🛠️ Running the System
-
-### Prerequisites
-
-* Docker
-* Docker Compose
-
-### Steps
-
-```bash
-git clone <repo-url>
-cd <repo-name>
-docker compose up
-```
-
-* API available at: `http://localhost:8000`
-* Analyst UI (if enabled): `http://localhost:8501`
 
 ---
 
