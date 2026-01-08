@@ -137,13 +137,42 @@ Paste the following JSON into the Analyst Console to test the system:
 
 {
   "transactions": [
-    { "from": "U1", "to": "A1", "amount": 5200 },
-    { "from": "U2", "to": "A1", "amount": 5100 },
-    { "from": "U3", "to": "A2", "amount": 5000 },
-    { "from": "A1", "to": "A3", "amount": 4800 },
-    { "from": "A2", "to": "A3", "amount": 4700 },
-    { "from": "A3", "to": "U4", "amount": 4600 },
-    { "from": "U4", "to": "A1", "amount": 4500 }
+    {
+      "sender": "U1",
+      "receiver": "M1",
+      "amount": 5200,
+      "time": "2024-01-01T11:00:00"
+    },
+    {
+      "sender": "U2",
+      "receiver": "M2",
+      "amount": 5100,
+      "time": "2024-01-01T11:01:00"
+    },
+    {
+      "sender": "M1",
+      "receiver": "R1",
+      "amount": 5000,
+      "time": "2024-01-01T11:02:00"
+    },
+    {
+      "sender": "M2",
+      "receiver": "R1",
+      "amount": 4950,
+      "time": "2024-01-01T11:03:00"
+    },
+    {
+      "sender": "R1",
+      "receiver": "M1",
+      "amount": 4900,
+      "time": "2024-01-01T11:04:00"
+    },
+    {
+      "sender": "R1",
+      "receiver": "M2",
+      "amount": 4850,
+      "time": "2024-01-01T11:05:00"
+    }
   ]
 }
 
@@ -197,42 +226,7 @@ POST /analyze
 
 This endpoint represents the interface through which **bank systems or fraud monitoring pipelines** submit transaction batches for evaluation.
 
-#### Example Input
 
-*(Simulated transaction batch sent by a bank system)*
-
-```json
-{
-  "transactions": [
-    { "from": "U1", "to": "A1", "amount": 5000 },
-    { "from": "U2", "to": "A1", "amount": 4800 },
-    { "from": "U3", "to": "A1", "amount": 5100 }
-  ]
-}
-```
-
-#### Example Output
-
-```json
-{
-  "risk_score": 0.82,
-  "risk_level": "HIGH",
-  "flags": [
-    "high_sender_diversity",
-    "similar_amounts",
-    "cyclic_flow_detected"
-  ],
-  "metrics": {
-    "unique_senders": 3,
-    "unique_receivers": 1,
-    "in_degree": 3,
-    "out_degree": 0,
-    "cycle_detected": true
-  }
-}
-```
-
----
 
 ## 📊 Risk Interpretation
 
@@ -285,3 +279,6 @@ This project demonstrates how **graph-based analysis** can be used to identify m
 * Explainable
 * Testable
 * Deployable
+
+
+**Video link is attached in google drive with file name as "Video Link"**
