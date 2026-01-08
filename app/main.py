@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 import networkx as nx
 import math
 from collections import defaultdict
@@ -7,7 +7,7 @@ from datetime import datetime
 app = FastAPI()
 
 # -----------------------------
-# Utility helpers
+# Helpers
 # -----------------------------
 
 def parse_time(ts):
@@ -17,31 +17,35 @@ def parse_time(ts):
         return None
 
 
-def sigmoid_like(x):
-    # smooth, bounded, never hits 1.0
-    return 1 - math.exp(-x)
+def scaled_risk(raw_score: float, batch_size: int) -> float:
+    if raw_score <= 0 or batch_size <= 0:
+        return 0.0
+    scale = math.log1p(batch_size)
+    return 1 - math.exp(-(raw_score / scale))
 
 
 # -----------------------------
 # API
 # -----------------------------
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
 @app.post("/analyze")
-def analyze(payload: dict):
-    if "transactions" not in payload:
-        raise HTTPException(status_code=400, detail="transactions missing")
+def analyze(payload: dict = Body(...)):
 
-    txs = payload["transactions"]
-    if not isinstance(txs, list) or not txs:
-        raise HTTPException(status_code=400, detail="transactions must be a non-empty list")
+    txs = payload.get("transactions")
+    if not isinstance(txs, list):
+        raise HTTPException(status_code=400, detail="transactions must be a list")
+
+    if len(txs) == 0:
+        return {
+            "batch_risk_score": 0.0,
+            "batch_risk_level": "LOW",
+            "accounts": [],
+            "transaction_risks": [],
+            "transactions": []
+        }
 
     # -----------------------------
-    # Build graph + metadata
+    # Build graph
     # -----------------------------
     G = nx.DiGraph()
     in_times = defaultdict(list)
@@ -51,7 +55,7 @@ def analyze(payload: dict):
     for tx in txs:
         for k in ("sender", "receiver", "amount", "time"):
             if k not in tx:
-                raise HTTPException(status_code=400, detail="invalid transaction format")
+                raise HTTPException(status_code=400, detail="invalid transaction")
 
         s, r = tx["sender"], tx["receiver"]
         t = parse_time(tx["time"])
@@ -62,9 +66,17 @@ def analyze(payload: dict):
         amounts[r].append(tx["amount"])
 
     # -----------------------------
-    # Detect mule-like accounts
+    # Detect cycles (ring fraud)
     # -----------------------------
-    mule_accounts = {}
+    cycle_nodes = set()
+    for c in nx.simple_cycles(G):
+        if len(c) >= 3:
+            cycle_nodes.update(c)
+
+    # -----------------------------
+    # Account risk
+    # -----------------------------
+    accounts = {}
 
     for node in G.nodes():
         incoming = G.in_degree(node)
@@ -73,174 +85,79 @@ def analyze(payload: dict):
         raw_score = 0.0
         reasons = []
 
-        # ---- NEW: score contribution breakdown
-        score_breakdown = {
-            "convergence": 0.0,
-            "rapid_passthrough": 0.0,
-            "amount_structuring": 0.0
-        }
+        # Mule patterns
+        if incoming >= 3:
+            raw_score += 0.4
+            reasons.append(f"received funds from {incoming} accounts")
 
-        convergence = incoming >= 3
-        rapid_passthrough = False
-        structuring = False
-
-        # Convergence
-        if convergence:
-            contribution = 0.4
-            raw_score += contribution
-            score_breakdown["convergence"] = contribution
-            reasons.append(f"received funds from {incoming} different accounts")
-
-        # Rapid pass-through
         if incoming > 0 and outgoing > 0:
-            in_t = sorted(t for t in in_times[node] if t)
-            out_t = sorted(t for t in out_times[node] if t)
-            if in_t and out_t and (out_t[0] - in_t[-1]).total_seconds() < 300:
-                contribution = 0.4
-                raw_score += contribution
-                rapid_passthrough = True
-                score_breakdown["rapid_passthrough"] = contribution
-                reasons.append("forwarded funds shortly after receipt")
+            ins = sorted(t for t in in_times[node] if t)
+            outs = sorted(t for t in out_times[node] if t)
+            if ins and outs and (outs[0] - ins[-1]).total_seconds() < 300:
+                raw_score += 0.4
+                reasons.append("rapid pass-through behavior")
 
-        # Amount structuring
         if len(amounts[node]) >= 3:
             if max(amounts[node]) - min(amounts[node]) < 0.1 * max(amounts[node]):
-                contribution = 0.3
-                raw_score += contribution
-                structuring = True
-                score_breakdown["amount_structuring"] = contribution
-                reasons.append(
-                    "handled multiple transactions with unusually similar amounts"
-                )
+                raw_score += 0.3
+                reasons.append("structured transaction amounts")
 
-        if raw_score > 0:
-            mule_accounts[node] = {
+        # Base risk
+        risk = scaled_risk(raw_score, len(txs))
+
+        # 🔥 HARD OVERRIDE: CIRCULAR FRAUD
+        if node in cycle_nodes:
+            risk = max(risk, 0.75)
+            reasons.append("participates in circular fund movement")
+
+        if risk > 0:
+            accounts[node] = {
                 "incoming": incoming,
                 "outgoing": outgoing,
-                "raw_score": round(raw_score, 2),
-                "risk_score": sigmoid_like(raw_score),
-                "risk_factors": {
-                    "convergence": convergence,
-                    "rapid_passthrough": rapid_passthrough,
-                    "amount_structuring": structuring
-                },
-                "score_breakdown": score_breakdown,  # 👈 NEW
-                "explanation": (
-                    "Account was flagged because it "
-                    + " and ".join(reasons)
-                    + "."
-                )
+                "risk_score": round(risk, 2),
+                "explanation": "Account flagged because it " + " and ".join(reasons) + "."
             }
 
     # -----------------------------
-    # Transaction-level risk
+    # Transaction-level risk (simple)
     # -----------------------------
-    mule_set = set(mule_accounts.keys())
+    flagged = set(accounts.keys())
     transaction_risks = []
 
     for tx in txs:
         score = 0.0
         reasons = []
 
-        # NOTE: kept for now (we will fix circularity in STEP 2)
-        if tx["sender"] in mule_set or tx["receiver"] in mule_set:
-            score += 0.4
-            reasons.append("involves mule-like account")
-
-        receiver_amounts = amounts.get(tx["receiver"], [])
-        if len(receiver_amounts) >= 2:
-            if abs(receiver_amounts[-1] - receiver_amounts[-2]) < 0.1 * receiver_amounts[-1]:
-                score += 0.3
-                reasons.append("amount similar to adjacent transactions")
-
-        t = parse_time(tx["time"])
-        prev_times = in_times.get(tx["receiver"], [])
-        if t and prev_times:
-            delta = abs((t - prev_times[-1]).total_seconds())
-            if delta < 300:
-                score += 0.3
-                reasons.append("rapid transaction timing")
-
-        score = min(1.0, score)
+        if tx["sender"] in flagged or tx["receiver"] in flagged:
+            score += 0.5
+            reasons.append("linked to high-risk account")
 
         transaction_risks.append({
             "sender": tx["sender"],
             "receiver": tx["receiver"],
             "amount": tx["amount"],
-            "risk_score": round(score, 2),
-            "reason": ", ".join(reasons) if reasons else "no elevated risk indicators"
+            "risk_score": round(min(score, 1.0), 2),
+            "reason": ", ".join(reasons) if reasons else "no elevated indicators"
         })
 
     # -----------------------------
-    # Batch risk (robust aggregation)
+    # Batch risk = strongest signal
     # -----------------------------
-    if mule_accounts:
-        risks = [a["risk_score"] for a in mule_accounts.values()]
-        batch_risk_score = min(
-            1.0,
-            0.6 * max(risks) + 0.4 * (sum(risks) / len(risks))
-        )
+    if accounts:
+        batch_risk_score = max(a["risk_score"] for a in accounts.values())
     else:
         batch_risk_score = 0.0
 
-    if batch_risk_score >= 0.7:
-        batch_risk_level = "HIGH"
-    elif batch_risk_score >= 0.4:
-        batch_risk_level = "MEDIUM"
-    else:
-        batch_risk_level = "LOW"
+    batch_risk_level = (
+        "HIGH" if batch_risk_score >= 0.7
+        else "MEDIUM" if batch_risk_score >= 0.4
+        else "LOW"
+    )
 
-    # -----------------------------
-    # Explainability Layer (Enterprise)
-    # -----------------------------
-    explainability_layer = {
-        "model_type": "Rule-based graph risk engine",
-        "data_usage": [
-            "Transaction sender and receiver relationships",
-            "Transaction timestamps",
-            "Transaction amounts"
-        ],
-        "signals_used": [
-            "Account convergence (many-to-one fund flows)",
-            "Rapid pass-through behavior",
-            "Transaction amount structuring"
-        ],
-        "scoring_characteristics": [
-            "Bounded risk scores between 0 and 1",
-            "Monotonic scoring (additional risk signals never reduce risk)",
-            "No historical customer profiling"
-        ],
-        "limitations": [
-            "Operates on transaction batches, not live streams",
-            "Does not infer intent, identity, or criminality",
-            "Thresholds are heuristic and configurable"
-        ],
-        "intended_use": (
-            "Decision-support system for human analysts. "
-            "Outputs should be interpreted alongside additional investigative context."
-        )
-    }
-
-    # -----------------------------
-    # Response
-    # -----------------------------
     return {
         "batch_risk_score": round(batch_risk_score, 2),
         "batch_risk_level": batch_risk_level,
-        "explainability": explainability_layer,
-        "accounts": [
-            {
-                "account": acc,
-                "incoming": info["incoming"],
-                "outgoing": info["outgoing"],
-                "raw_score": info["raw_score"],
-                "risk_score": round(info["risk_score"], 2),
-                "risk_factors": info["risk_factors"],
-                "score_breakdown": info["score_breakdown"],  # 👈 NEW
-                "explanation": info["explanation"]
-            }
-            for acc, info in mule_accounts.items()
-        ],
+        "accounts": [{"account": k, **v} for k, v in accounts.items()],
         "transaction_risks": transaction_risks,
         "transactions": txs
     }
