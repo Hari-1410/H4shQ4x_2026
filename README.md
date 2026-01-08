@@ -224,4 +224,4 @@ This project demonstrates how **graph-based analysis** can be used to identify m
 
 * Explainable
 * Testable
-* Defensible under adversarial conditions
+* Deployable
