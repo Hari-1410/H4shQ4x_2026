@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 
 # IMPORTANT: Docker service name
 API_URL = "http://api:8000/analyze"
+API_KEY = "H4shQ4x-2026-SECRET-KEY"
 
 st.set_page_config(page_title="Fraud Risk Analyst Console", layout="wide")
 
@@ -37,7 +38,12 @@ with left:
 if run:
     try:
         payload = json.loads(raw)
-        res = requests.post(API_URL, json=payload, timeout=10)
+        res = requests.post(
+            API_URL,
+            json=payload,
+            headers={"X-API-Key": API_KEY},
+            timeout=10
+        )
         if res.status_code != 200:
             st.error(res.text)
             st.stop()
