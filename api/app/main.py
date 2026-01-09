@@ -16,9 +16,6 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-# =========================
-# RATE LIMITER
-# =========================
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
@@ -30,9 +27,6 @@ def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         content={"detail": "Too many requests"}
     )
 
-# =========================
-# SECURITY CONFIG
-# =========================
 API_KEY = os.getenv("API_KEY")
 if not API_KEY:
     raise RuntimeError("API_KEY not configured")
@@ -41,9 +35,6 @@ def require_api_key(x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-# =========================
-# INPUT MODELS
-# =========================
 class Transaction(BaseModel):
     sender: str = Field(min_length=2, max_length=32)
     receiver: str = Field(min_length=2, max_length=32)
@@ -51,27 +42,21 @@ class Transaction(BaseModel):
     time: datetime
 
 class Batch(BaseModel):
-    transactions: List[Transaction] = Field(min_items=1, max_items=300)
+    transactions: List[Transaction] = Field(
+        min_length=1,
+        max_length=300
+    )
 
-# =========================
-# HEALTH
-# =========================
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# =========================
-# ANALYSIS ENDPOINT
-# =========================
 @app.post("/analyze", dependencies=[Depends(require_api_key)])
 @limiter.limit("5/minute")
 def analyze(request: Request, batch: Batch):
 
     txs = batch.transactions
 
-    # -------------------------
-    # Replay Protection
-    # -------------------------
     batch_hash = hashlib.sha256(
         json.dumps(batch.dict(), sort_keys=True, default=str).encode()
     ).hexdigest()
@@ -84,9 +69,6 @@ def analyze(request: Request, batch: Batch):
 
     app.state.seen.add(batch_hash)
 
-    # -------------------------
-    # Build EVENT GRAPH
-    # -------------------------
     G = nx.MultiDiGraph()
 
     for tx in txs:
@@ -100,9 +82,6 @@ def analyze(request: Request, batch: Batch):
     if len(G.nodes) > 200 or G.number_of_edges() > 1000:
         raise HTTPException(413, "Graph too large")
 
-    # -------------------------
-    # Pre-compute features
-    # -------------------------
     fan_in_count = defaultdict(int)
     fan_out_count = defaultdict(int)
     fan_in_amount = defaultdict(float)
@@ -114,34 +93,25 @@ def analyze(request: Request, batch: Batch):
         fan_in_amount[v] += data["amount"]
         fan_in_times[v].append(data["time"])
 
-    # -------------------------
-    # Cycle Detection (Directed)
-    # -------------------------
     cycle_nodes = set()
     for cycle in nx.simple_cycles(G):
         if 3 <= len(cycle) <= 6:
             cycle_nodes.update(cycle)
 
-    # -------------------------
-    # Account Risk Scoring
-    # -------------------------
     accounts = {}
 
     for node in G.nodes():
         raw = 0.0
         reasons = []
 
-        # Fan-in smurfing
         if fan_in_count[node] >= 3:
             raw += 0.3
             reasons.append("high inbound transaction count")
 
-        # Cumulative volume
         if fan_in_amount[node] >= 25000:
             raw += 0.3
             reasons.append("high cumulative inbound volume")
 
-        # Velocity
         times = sorted(fan_in_times[node])
         if len(times) >= 3:
             delta = (times[-1] - times[0]).total_seconds()
@@ -149,12 +119,10 @@ def analyze(request: Request, batch: Batch):
                 raw += 0.3
                 reasons.append("rapid inbound transaction velocity")
 
-        # Pass-through behavior
         if fan_in_count[node] > 0 and fan_out_count[node] > 0:
             raw += 0.2
             reasons.append("pass-through account")
 
-        # Cycles
         if node in cycle_nodes:
             raw += 0.2
             reasons.append("circular fund movement")
@@ -171,9 +139,6 @@ def analyze(request: Request, batch: Batch):
                 "explanation": ", ".join(reasons)
             }
 
-    # -------------------------
-    # Transaction Risk
-    # -------------------------
     risky_accounts = {a["account"] for a in accounts.values()}
     transaction_risks = []
 
@@ -194,9 +159,6 @@ def analyze(request: Request, batch: Batch):
             "reason": ", ".join(reasons) if reasons else "no elevated indicators"
         })
 
-    # -------------------------
-    # Batch Risk
-    # -------------------------
     batch_risk = max(
         [a["risk_score"] for a in accounts.values()],
         default=0.0
