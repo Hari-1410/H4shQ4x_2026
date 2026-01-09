@@ -1,18 +1,12 @@
-
 import streamlit as st
 import pandas as pd
 import networkx as nx
 import plotly.graph_objects as go
+from pathlib import Path
 
-# -------------------------------------------------
-# STREAMLIT CONFIG
-# -------------------------------------------------
 st.set_page_config(page_title="UPI Fraud Detection", layout="wide")
 st.title("🔍 UPI Fraud & Mule Account Detection System")
 
-# -------------------------------------------------
-# DATASET SELECTION
-# -------------------------------------------------
 st.markdown("### 📊 Select Dataset")
 
 dataset_choice = st.selectbox(
@@ -20,38 +14,36 @@ dataset_choice = st.selectbox(
     ["Synthetic UPI Data", "PaySim Dataset"]
 )
 
-# -------------------------------------------------
-# LOAD & NORMALIZE DATA
-# -------------------------------------------------
+paysim_path = Path("data/paysim/paysim.csv")
+
 if dataset_choice == "Synthetic UPI Data":
     df = pd.read_csv("data/transactions.csv")
     df["time"] = pd.to_datetime(df["time"], format="%H:%M")
 
 else:
-    raw_df = pd.read_csv("data/paysim/paysim.csv")
+    if not paysim_path.exists():
+        st.error("❌ PaySim dataset not found at data/paysim/paysim.csv")
+        st.info("Using Synthetic UPI Data instead.")
+        df = pd.read_csv("data/transactions.csv")
+        df["time"] = pd.to_datetime(df["time"], format="%H:%M")
+    else:
+        raw_df = pd.read_csv(paysim_path)
 
-    df = pd.DataFrame()
-    df["sender"] = raw_df["nameOrig"]
-    df["receiver"] = raw_df["nameDest"]
-    df["amount"] = raw_df["amount"]
-    df["time"] = pd.to_datetime(raw_df["step"], unit="m")
+        df = pd.DataFrame()
+        df["sender"] = raw_df["nameOrig"]
+        df["receiver"] = raw_df["nameDest"]
+        df["amount"] = raw_df["amount"]
+        df["time"] = pd.to_datetime(raw_df["step"], unit="m")
 
-    # keep demo fast
-    df = df.head(5000)
+        df = df.head(5000)
 
-# -------------------------------------------------
-# BUILD TRANSACTION GRAPH (DIRECTED)
-# -------------------------------------------------
 G = nx.DiGraph()
 for _, row in df.iterrows():
     G.add_edge(row["sender"], row["receiver"])
 
-# -------------------------------------------------
-# MULE ACCOUNT DETECTION
-# -------------------------------------------------
 results = []
 for node in G.nodes():
-    if node.startswith(("A", "C")):  # A = synthetic, C = PaySim
+    if node.startswith(("A", "C")):
         in_deg = G.in_degree(node)
         out_deg = G.out_degree(node)
         risk = in_deg + out_deg
@@ -67,9 +59,6 @@ risk_df = pd.DataFrame(results).sort_values(
     by="risk_score", ascending=False
 )
 
-# -------------------------------------------------
-# FRAUD RING DETECTION
-# -------------------------------------------------
 UG = nx.Graph()
 for _, row in df.iterrows():
     UG.add_edge(row["sender"], row["receiver"])
@@ -85,21 +74,12 @@ for comp in nx.connected_components(UG):
                 "internal_transactions": sub.number_of_edges()
             })
 
-# -------------------------------------------------
-# DASHBOARD: TRANSACTIONS
-# -------------------------------------------------
 st.subheader("📄 Transactions")
 st.dataframe(df.head(100), use_container_width=True)
 
-# -------------------------------------------------
-# SUSPICIOUS ACCOUNTS
-# -------------------------------------------------
 st.subheader("🚩 Suspicious (Mule-like) Accounts")
 st.dataframe(risk_df.head(10), use_container_width=True)
 
-# -------------------------------------------------
-# ACCOUNT EXPLANATIONS (TIME-AWARE)
-# -------------------------------------------------
 st.subheader("🟡 Why were these accounts flagged?")
 
 for _, row in risk_df.head(5).iterrows():
@@ -120,13 +100,11 @@ for _, row in risk_df.head(5).iterrows():
         if 0 <= delta <= 15:
             reasons.append(f"forwarded money within {int(delta)} minutes")
 
-    st.markdown(
-        f"**Account `{acc}`** was flagged because it " + " and ".join(reasons) + "."
-    )
+    if reasons:
+        st.markdown(
+            f"**Account `{acc}`** was flagged because it " + " and ".join(reasons) + "."
+        )
 
-# -------------------------------------------------
-# FRAUD RING EXPLANATIONS
-# -------------------------------------------------
 st.subheader("🔴 Fraud Rings")
 
 if fraud_rings:
@@ -137,9 +115,6 @@ if fraud_rings:
 else:
     st.success("No fraud rings detected.")
 
-# -------------------------------------------------
-# GLOBAL NETWORK VISUALIZATION
-# -------------------------------------------------
 st.subheader("🕸️ Transaction Network Overview")
 
 pos = nx.spring_layout(G, seed=42)
@@ -179,9 +154,6 @@ node_trace = go.Scatter(
 fig = go.Figure(data=[edge_trace, node_trace])
 st.plotly_chart(fig, use_container_width=True)
 
-# -------------------------------------------------
-# FRAUD RING ISOLATED VISUALIZATION
-# -------------------------------------------------
 st.subheader("🔴 Fraud Ring Visualization (Isolated View)")
 
 if fraud_rings:
@@ -234,6 +206,5 @@ if fraud_rings:
 
     fig = go.Figure(data=[edge_trace, node_trace])
     st.plotly_chart(fig, use_container_width=True)
-
 else:
     st.info("No fraud rings available.")
