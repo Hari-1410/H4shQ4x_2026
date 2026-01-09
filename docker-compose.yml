@@ -1,20 +1,14 @@
 services:
   api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile
-    container_name: fraud-api
+    build: ./api
+    environment:
+      - API_KEY=H4shQ4x-2026-SECRET-KEY
     ports:
       - "8000:8000"
-    restart: unless-stopped
 
   ui:
-    build:
-      context: ./ui
-      dockerfile: Dockerfile
-    container_name: fraud-ui
+    build: ./ui
+    environment:
+      - API_KEY=H4shQ4x-2026-SECRET-KEY
     ports:
       - "8501:8501"
-    depends_on:
-      - api
-    restart: unless-stopped

@@ -2,9 +2,11 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from pydantic import BaseModel, Field
 from typing import List
 from datetime import datetime
+from collections import defaultdict
 import networkx as nx
 import hashlib
 import json
+import os
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -15,7 +17,7 @@ from fastapi.responses import JSONResponse
 app = FastAPI()
 
 # =========================
-# RATE LIMITER SETUP
+# RATE LIMITER
 # =========================
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -25,13 +27,15 @@ app.add_middleware(SlowAPIMiddleware)
 def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
         status_code=429,
-        content={"detail": "Too many requests. Slow down."}
+        content={"detail": "Too many requests"}
     )
 
 # =========================
 # SECURITY CONFIG
 # =========================
-API_KEY = "H4shQ4x-2026-SECRET-KEY"
+API_KEY = os.getenv("API_KEY")
+if not API_KEY:
+    raise RuntimeError("API_KEY not configured")
 
 def require_api_key(x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
@@ -50,14 +54,14 @@ class Batch(BaseModel):
     transactions: List[Transaction] = Field(min_items=1, max_items=300)
 
 # =========================
-# HEALTH CHECK
+# HEALTH
 # =========================
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 # =========================
-# ANALYSIS ENDPOINT (RATE LIMITED)
+# ANALYSIS ENDPOINT
 # =========================
 @app.post("/analyze", dependencies=[Depends(require_api_key)])
 @limiter.limit("5/minute")
@@ -76,25 +80,45 @@ def analyze(request: Request, batch: Batch):
         app.state.seen = set()
 
     if batch_hash in app.state.seen:
-        raise HTTPException(409, "Duplicate batch detected")
+        raise HTTPException(409, "Duplicate batch")
 
     app.state.seen.add(batch_hash)
 
     # -------------------------
-    # Build Graph (Safe)
+    # Build EVENT GRAPH
     # -------------------------
-    G = nx.DiGraph()
+    G = nx.MultiDiGraph()
+
     for tx in txs:
-        G.add_edge(tx.sender, tx.receiver)
+        G.add_edge(
+            tx.sender,
+            tx.receiver,
+            amount=tx.amount,
+            time=tx.time
+        )
 
-    if len(G.nodes) > 200 or len(G.edges) > 500:
-        raise HTTPException(413, "Transaction graph too large")
+    if len(G.nodes) > 200 or G.number_of_edges() > 1000:
+        raise HTTPException(413, "Graph too large")
 
     # -------------------------
-    # Detect Cycles (Bounded)
+    # Pre-compute features
+    # -------------------------
+    fan_in_count = defaultdict(int)
+    fan_out_count = defaultdict(int)
+    fan_in_amount = defaultdict(float)
+    fan_in_times = defaultdict(list)
+
+    for u, v, data in G.edges(data=True):
+        fan_out_count[u] += 1
+        fan_in_count[v] += 1
+        fan_in_amount[v] += data["amount"]
+        fan_in_times[v].append(data["time"])
+
+    # -------------------------
+    # Cycle Detection (Directed)
     # -------------------------
     cycle_nodes = set()
-    for cycle in nx.cycle_basis(G.to_undirected()):
+    for cycle in nx.simple_cycles(G):
         if 3 <= len(cycle) <= 6:
             cycle_nodes.update(cycle)
 
@@ -104,37 +128,51 @@ def analyze(request: Request, batch: Batch):
     accounts = {}
 
     for node in G.nodes():
-        incoming = G.in_degree(node)
-        outgoing = G.out_degree(node)
-
         raw = 0.0
         reasons = []
 
-        if incoming >= 3:
-            raw += 0.4
-            reasons.append("fund convergence")
-
-        if incoming > 0 and outgoing > 0:
+        # Fan-in smurfing
+        if fan_in_count[node] >= 3:
             raw += 0.3
-            reasons.append("pass-through behavior")
+            reasons.append("high inbound transaction count")
 
+        # Cumulative volume
+        if fan_in_amount[node] >= 25000:
+            raw += 0.3
+            reasons.append("high cumulative inbound volume")
+
+        # Velocity
+        times = sorted(fan_in_times[node])
+        if len(times) >= 3:
+            delta = (times[-1] - times[0]).total_seconds()
+            if delta <= 900:
+                raw += 0.3
+                reasons.append("rapid inbound transaction velocity")
+
+        # Pass-through behavior
+        if fan_in_count[node] > 0 and fan_out_count[node] > 0:
+            raw += 0.2
+            reasons.append("pass-through account")
+
+        # Cycles
         if node in cycle_nodes:
-            raw += 0.3
-            reasons.append("circular movement detected")
+            raw += 0.2
+            reasons.append("circular fund movement")
 
-        risk = min(raw, 0.9)
+        risk = min(raw, 0.95)
 
         if risk > 0:
             accounts[node] = {
                 "account": node,
-                "incoming": incoming,
-                "outgoing": outgoing,
+                "incoming_txs": fan_in_count[node],
+                "outgoing_txs": fan_out_count[node],
+                "inbound_amount": round(fan_in_amount[node], 2),
                 "risk_score": round(risk, 2),
                 "explanation": ", ".join(reasons)
             }
 
     # -------------------------
-    # Transaction-Level Risk
+    # Transaction Risk
     # -------------------------
     risky_accounts = {a["account"] for a in accounts.values()}
     transaction_risks = []
@@ -145,12 +183,13 @@ def analyze(request: Request, batch: Batch):
 
         if tx.sender in risky_accounts or tx.receiver in risky_accounts:
             score = 0.5
-            reasons.append("linked to high-risk account")
+            reasons.append("linked to risky account")
 
         transaction_risks.append({
             "sender": tx.sender,
             "receiver": tx.receiver,
             "amount": tx.amount,
+            "time": tx.time,
             "risk_score": score,
             "reason": ", ".join(reasons) if reasons else "no elevated indicators"
         })
